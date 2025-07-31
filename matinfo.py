@@ -4,6 +4,7 @@ import openai
 import json
 from datetime import datetime, timezone
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -100,7 +101,7 @@ def get_product_detail(product_url):
             'title': None,
             'ingredients': [],
             'allergens': [],
-            'nutrition': {},
+            'nutrition': {"per_100g": {}},
             'package_size': {},
             'origin_country': None,
             'gtin': None,
@@ -134,8 +135,8 @@ def get_product_detail(product_url):
         ingredients_section = soup.find('section', class_='ingredients')
         if ingredients_section:
             ingredients_text = ingredients_section.find('p').get_text(strip=True)
-            ingredients_json = get_ingredients(ingredients_text)
-            product_info['ingredients'] = ingredients_json
+            # ingredients_json = get_ingredients(ingredients_text)
+            product_info['ingredients'] = ingredients_text
 
         # Extract allergens
         allergens_section = soup.find('section', class_='allergens')
@@ -145,10 +146,17 @@ def get_product_detail(product_url):
                 product_info['allergens'].append(allergen_name)
 
         # Extract nutrition information
+        nutrition_map = {
+            "Energi": "energy",
+            "Fett": "fat_g",
+            "- Mettede fettsyrer": "saturated_fat_g",
+            "Karbohydrat": "carbs_g",
+            "- Sukkerarter": "sugars_g",
+            "Protein": "protein_g",
+            "Salt": "salt_g",
+        }
         nutrition_section = soup.find('h2', string='Næringsinnhold')
         if nutrition_section:
-            unit_amount = nutrition_section.find_next('p').get_text(strip=True)
-            product_info['nutrition']['unit'] = unit_amount
             nutrition_table = nutrition_section.find_next('table', class_='div-table')
             if nutrition_table:
                 for row in nutrition_table.find_all('tr'):
@@ -156,7 +164,15 @@ def get_product_detail(product_url):
                     if len(cells) == 2:
                         nutrient = cells[0].get_text(strip=True)
                         value = cells[1].get_text(strip=True)
-                        product_info['nutrition'][nutrient] = value
+                        if nutrient == "Energi":
+                            clean_val = re.sub(r"(\d)\s+(\d)", r"\1\2", value) # Remove spaces inside numbers (e.g., "1 020" → "1020")
+                            values = re.findall(r"\d+", clean_val)
+                            product_info['nutrition']['per_100g']['energy_kJ'] = int(values[0])
+                            product_info['nutrition']['per_100g']['energy_kcal'] = int(values[1])
+                        else:
+                            value_str = re.search(r"\d+\.\d+", value.replace(",", ".")).group()
+                            value_num = float(value_str) if "." in value_str else int(value_str)
+                            product_info['nutrition']['per_100g'][nutrition_map[nutrient]] = value_num
 
         # Extract product details
         details_section = soup.find('h2', string='Produktinformasjon')
@@ -198,7 +214,7 @@ def matinfo_scraper():
     search_url = "https://produkter.matinfo.no/resultat?query=nordic%20lunch"
     product_list = get_product_list(search_url)
 
-    for product_url in product_list[:2]:
+    for product_url in product_list[:5]:
         get_product_detail(product_url)
 
     return result_data
