@@ -13,42 +13,69 @@ client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 result_data = []
 
-def get_ingredients(raw_string):
-    prompt = """I have a raw ingredients string describing groups of ingredients with their percentage amounts and nested sub-ingredients. The format typically looks like this:
+def split_outside_parentheses(s, delimiter=','):
+    """Split string by delimiter, ignoring delimiters inside parentheses."""
+    parts = []
+    current = []
+    depth = 0
+    for c in s:
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            if depth > 0:
+                depth -= 1
+        if c == delimiter and depth == 0:
+            part = ''.join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+        else:
+            current.append(c)
+    part = ''.join(current).strip()
+    if part:
+        parts.append(part)
+    return parts
 
-"GROUP_NAME PERCENT % (sub-ingredient1, sub-ingredient2, sub-ingredient3 (nested sub-ingredients), ...), NEXT_GROUP PERCENT % (...), ..."
+def clean_subingredient(name):
+    """Clean and normalize sub-ingredient name."""
+    # Remove content in parentheses but keep the main name, e.g.:
+    # "sylteagurk (agurk, vann, eddik, salt)" -> "sylteagurk"
+    # Also fix typos like 'storfe‑collagen' -> 'storfe collagen'
+    name = name.strip()
+    # Replace non-breaking hyphen or similar chars with space
+    name = re.sub(r'[\u2011\u2010\u2013\u2014\-]+', ' ', name)
+    # Remove text within parentheses
+    name = name.split('(')[0].strip().rstrip(')')
+    # lowercase
+    name = name.lower()
+    # Replace multiple spaces with single space
+    name = re.sub(r'\s+', ' ', name)
+    return name
 
-Your task is to parse this string and output structured JSON data as an array of objects. Each object should contain:
+def parse_ingredients(raw_str):
+    raw_str = raw_str.strip().rstrip('.') # Remove trailing period if present
+    # Pattern to match: GROUP_NAME PERCENT % ( ... )
+    pattern = re.compile(r'([A-ZÆØÅ\s]+?)\s*(\d+)\s*%\s*\((.*?)\)(?=, [A-ZÆØÅ\s]+ \d+ %|$)', re.DOTALL)
+    matches = pattern.findall(raw_str)
+    result = []
 
-- "group": The name of the ingredient group (text before the percentage sign).
-
-- "percent": The numeric percentage value associated with that group.
-
-- "sub": An array of the immediate sub-ingredients within the parentheses of that group. For complex nested ingredients (sub-ingredients that have their own parentheses), include only the main sub-ingredient names without all nested details or parentheses content, i.e., treat nested ingredients as a single sub-ingredient name without inner breakdown, unless clearly separated by commas outside parentheses.
-
-Normalize all sub-ingredient names by:
-
-- Making them lowercase.
-
-- Removing extra parentheses details inside nested sub-ingredients (except treat the entire nested phrase as one sub-ingredient).
-
-- Removing duplicate entries when possible.
-
-- Replacing special characters or typos for clarity (for instance, change “storfe‑collagen” to “storfe collagen").
-
-Return only valid JSON content without any description or any other contents."""
-
-    response = client.chat.completions.create(
-        model="gpt-4.1",
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": raw_string}
-        ],
-        temperature=0.0,  # Controls randomness (0.0 = deterministic, 1.0 = creative)
-    )
-
-    json_data = json.loads(response.choices[0].message.content)
-    return json_data
+    for group, percent, subs_str in matches:
+        group = group.strip()
+        percent = int(percent)
+        # Split sub-ingredients by commas outside parentheses
+        subs = split_outside_parentheses(subs_str)
+        cleaned_subs = []
+        for sub in subs:
+            # Clean subingredient
+            clean_name = clean_subingredient(sub)
+            if clean_name and clean_name not in cleaned_subs:
+                cleaned_subs.append(clean_name)
+        result.append({
+            "group": group,
+            "percent": percent,
+            "sub": cleaned_subs
+        })
+    return result
 
 def get_product_list(search_url):
     try:
@@ -135,8 +162,8 @@ def get_product_detail(product_url):
         ingredients_section = soup.find('section', class_='ingredients')
         if ingredients_section:
             ingredients_text = ingredients_section.find('p').get_text(strip=True)
-            # ingredients_json = get_ingredients(ingredients_text)
-            product_info['ingredients'] = ingredients_text
+            ingredients_json = parse_ingredients(ingredients_text)
+            product_info['ingredients'] = ingredients_json
 
         # Extract allergens
         allergens_section = soup.find('section', class_='allergens')
@@ -214,7 +241,7 @@ def matinfo_scraper():
     search_url = "https://produkter.matinfo.no/resultat?query=nordic%20lunch"
     product_list = get_product_list(search_url)
 
-    for product_url in product_list[:5]:
+    for product_url in product_list:
         get_product_detail(product_url)
 
     return result_data
