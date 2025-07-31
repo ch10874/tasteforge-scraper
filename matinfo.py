@@ -1,10 +1,53 @@
 import requests
 from bs4 import BeautifulSoup
+import openai
 import json
 from datetime import datetime, timezone
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 result_data = []
+
+def get_ingredients(raw_string):
+    prompt = """I have a raw ingredients string describing groups of ingredients with their percentage amounts and nested sub-ingredients. The format typically looks like this:
+
+"GROUP_NAME PERCENT % (sub-ingredient1, sub-ingredient2, sub-ingredient3 (nested sub-ingredients), ...), NEXT_GROUP PERCENT % (...), ..."
+
+Your task is to parse this string and output structured JSON data as an array of objects. Each object should contain:
+
+- "group": The name of the ingredient group (text before the percentage sign).
+
+- "percent": The numeric percentage value associated with that group.
+
+- "sub": An array of the immediate sub-ingredients within the parentheses of that group. For complex nested ingredients (sub-ingredients that have their own parentheses), include only the main sub-ingredient names without all nested details or parentheses content, i.e., treat nested ingredients as a single sub-ingredient name without inner breakdown, unless clearly separated by commas outside parentheses.
+
+Normalize all sub-ingredient names by:
+
+- Making them lowercase.
+
+- Removing extra parentheses details inside nested sub-ingredients (except treat the entire nested phrase as one sub-ingredient).
+
+- Removing duplicate entries when possible.
+
+- Replacing special characters or typos for clarity (for instance, change “storfe‑collagen” to “storfe collagen").
+
+Return only valid JSON content without any description or any other contents."""
+
+    response = client.chat.completions.create(
+        model="gpt-4.1",
+        messages=[
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": raw_string}
+        ],
+        temperature=0.0,  # Controls randomness (0.0 = deterministic, 1.0 = creative)
+    )
+
+    json_data = json.loads(response.choices[0].message.content)
+    return json_data
 
 def get_product_list(search_url):
     try:
@@ -55,7 +98,7 @@ def get_product_detail(product_url):
             'producer': None,
             'brand': None,
             'title': None,
-            'ingredients': None,
+            'ingredients': [],
             'allergens': [],
             'nutrition': {},
             'package_size': {},
@@ -68,7 +111,6 @@ def get_product_detail(product_url):
 
             'product_description': None,
             'image': None,
-            'tags': [],
         }
 
         #Extract product id
@@ -91,7 +133,9 @@ def get_product_detail(product_url):
         # Extract ingredients
         ingredients_section = soup.find('section', class_='ingredients')
         if ingredients_section:
-            product_info['ingredients'] = ingredients_section.find('p').get_text(strip=True)
+            ingredients_text = ingredients_section.find('p').get_text(strip=True)
+            ingredients_json = get_ingredients(ingredients_text)
+            product_info['ingredients'] = ingredients_json
 
         # Extract allergens
         allergens_section = soup.find('section', class_='allergens')
@@ -103,6 +147,8 @@ def get_product_detail(product_url):
         # Extract nutrition information
         nutrition_section = soup.find('h2', string='Næringsinnhold')
         if nutrition_section:
+            unit_amount = nutrition_section.find_next('p').get_text(strip=True)
+            product_info['nutrition']['unit'] = unit_amount
             nutrition_table = nutrition_section.find_next('table', class_='div-table')
             if nutrition_table:
                 for row in nutrition_table.find_all('tr'):
@@ -152,7 +198,7 @@ def matinfo_scraper():
     search_url = "https://produkter.matinfo.no/resultat?query=nordic%20lunch"
     product_list = get_product_list(search_url)
 
-    for product_url in product_list[:5]:
+    for product_url in product_list[:2]:
         get_product_detail(product_url)
 
     return result_data
