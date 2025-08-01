@@ -227,9 +227,6 @@ def get_product_detail(product_url):
         global result_data
         result_data.append(product_info)
 
-        with open("product_info.json", 'w', encoding="utf-8") as file:
-            json.dump(result_data, file, ensure_ascii=False, indent=2)
-
     except Exception as e:
         print(f"Error: {e}")
 
@@ -243,6 +240,9 @@ def matinfo_scraper():
 
     for product_url in product_list:
         get_product_detail(product_url)
+
+    with open("product_info.json", 'w', encoding="utf-8") as file:
+        json.dump(result_data, file, ensure_ascii=False, indent=2)
 
     return result_data
 
