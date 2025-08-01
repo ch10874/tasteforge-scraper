@@ -1,15 +1,8 @@
 import requests
 from bs4 import BeautifulSoup
-import openai
 import json
 from datetime import datetime, timezone
-import os
 import re
-from dotenv import load_dotenv
-
-load_dotenv()
-
-client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 result_data = []
 

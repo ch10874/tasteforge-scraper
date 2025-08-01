@@ -1,15 +1,8 @@
 import requests
 from bs4 import BeautifulSoup
-import openai
 import json
 from datetime import datetime, timezone
-import os
 import re
-from dotenv import load_dotenv
-
-load_dotenv()
-
-client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 result_data = []
 
@@ -38,35 +31,41 @@ def split_outside_parentheses(s, delimiter=','):
 
 def clean_subingredient(name):
     """Clean and normalize sub-ingredient name."""
-    # Remove content in parentheses but keep the main name, e.g.:
-    # "sylteagurk (agurk, vann, eddik, salt)" -> "sylteagurk"
-    # Also fix typos like 'storfe‑collagen' -> 'storfe collagen'
-    name = name.strip()
-    # Replace non-breaking hyphen or similar chars with space
-    name = re.sub(r'[\u2011\u2010\u2013\u2014\-]+', ' ', name)
-    # Remove text within parentheses
+    # Lowercase
+    name = name.strip().lower()
+    # Replace non-breaking hyphen or similar chars with normal hyphen or space
+    name = re.sub(r'[\u2011\u2010\u2013\u2014]', '-', name)
+    # Remove content inside parentheses but keep the outer word (e.g. "syltet agurk (agurk, vann)" -> "syltet agurk")
     name = name.split('(')[0].strip().rstrip(')')
-    # lowercase
-    name = name.lower()
     # Replace multiple spaces with single space
     name = re.sub(r'\s+', ' ', name)
     return name
 
 def parse_ingredients(raw_str):
-    raw_str = raw_str.strip().rstrip('.') # Remove trailing period if present
-    # Pattern to match: GROUP_NAME PERCENT % ( ... )
-    pattern = re.compile(r'([A-ZÆØÅ\s]+?)\s*(\d+)\s*%\s*\((.*?)\)(?=, [A-ZÆØÅ\s]+ \d+ %|$)', re.DOTALL)
+    # Preprocess: remove trailing periods and normalize whitespace
+    raw_str = raw_str.strip()
+    raw_str = re.sub(r'\s+', ' ', raw_str)
+
+    # Pattern to extract groups with percent and their sub-ingredients:
+    # Group name may have spaces and hyphens, percent is inside parentheses with optional decimal and % sign after
+    # Format: GROUP_NAME (PERCENT %): sub-ingredients.....
+    # We use a regex to capture group name, percent, and sub-ingredients until next group or end
+    pattern = re.compile(
+        r'([A-ZÆØÅ\s\-]+)\s*\(([\d,\.]+)\s?%\):\s*(.*?)(?=(?:[A-ZÆØÅ\s\-]+\s*\([\d,\.]+%\):)|$)', re.DOTALL)
     matches = pattern.findall(raw_str)
     result = []
 
-    for group, percent, subs_str in matches:
+    for group, percent_str, subs_str in matches:
         group = group.strip()
-        percent = int(percent)
-        # Split sub-ingredients by commas outside parentheses
-        subs = split_outside_parentheses(subs_str)
+        # Replace comma decimal by dot and convert percent to float
+        percent = float(percent_str.replace(',', '.'))
+
+        # Clean sub-ingredients:
+        # First, split by commas and ' og '
+        sub_parts = split_outside_parentheses(subs_str.rstrip('.'))
+
         cleaned_subs = []
-        for sub in subs:
-            # Clean subingredient
+        for sub in sub_parts:
             clean_name = clean_subingredient(sub)
             if clean_name and clean_name not in cleaned_subs:
                 cleaned_subs.append(clean_name)
@@ -142,89 +141,58 @@ def get_product_detail(product_url):
             'image': None,
         }
 
-        #Extract product id
+        # Extract product id
         match = re.search(r'/products/(\d+)', product_url)
         product_info['product_id'] = match.group(1) if match else None
-        print(product_info)
-        return
 
-        # Extract brand and producer info
-        brand_info = soup.find('div', class_='brands')
-        if brand_info:
-            for p in brand_info.find_all('p'):
-                text = p.get_text(strip=True)
-                if 'PRODUSENT:' in text:
-                    product_info['producer'] = text.split(':')[-1].strip()
-                elif 'VAREMERKE:' in text:
-                    product_info['brand'] = text.split(':')[-1].strip()
+        # Extract product title and brand
+        product_info_section = soup.find('div', attrs={'data-testid': 'product-info-section'})
+        title = product_info_section.find('h1').get_text(strip=True) if product_info_section else None
+        sub_titles = product_info_section.find('p').get_text(strip=True).split(', ')
 
-        # Extract product title
-        product_info['title'] = soup.find('h1').get_text(strip=True) if soup.find('h1') else None
+        product_info['title'] = title + ' - ' + ' - '.join(sub_titles[:-1])
+        product_info['brand'] = sub_titles[-1].strip()
+        
+        # Extract product image url
+        product_image = soup.find('main', id="main-content").find('img', class_='k-image k-image--contain')
+        product_info['image'] = product_image['src'] if product_image else None
 
-        # Extract ingredients
-        ingredients_section = soup.find('section', class_='ingredients')
-        if ingredients_section:
-            ingredients_text = ingredients_section.find('p').get_text(strip=True)
-            ingredients_json = parse_ingredients(ingredients_text)
-            product_info['ingredients'] = ingredients_json
-
-        # Extract allergens
-        allergens_section = soup.find('section', class_='allergens')
-        for row in allergens_section.find('tbody').find_all('tr'):
-            allergen_name = row.find('td').get_text(strip=True)
-            if 'circle-red' in str(row):
-                product_info['allergens'].append(allergen_name)
-
-        # Extract nutrition information
+        # Extract product details
         nutrition_map = {
-            "Energi": "energy",
             "Fett": "fat_g",
-            "- Mettede fettsyrer": "saturated_fat_g",
-            "Karbohydrat": "carbs_g",
-            "- Sukkerarter": "sugars_g",
+            "hvorav mettede fettsyrer": "saturated_fat_g",
+            "Karbohydrater": "carbs_g",
+            "hvorav sukkerarter": "sugars_g",
             "Protein": "protein_g",
             "Salt": "salt_g",
         }
-        nutrition_section = soup.find('h2', string='Næringsinnhold')
-        if nutrition_section:
-            nutrition_table = nutrition_section.find_next('table', class_='div-table')
-            if nutrition_table:
-                for row in nutrition_table.find_all('tr'):
-                    cells = row.find_all('td')
-                    if len(cells) == 2:
-                        nutrient = cells[0].get_text(strip=True)
-                        value = cells[1].get_text(strip=True)
-                        if nutrient == "Energi":
-                            clean_val = re.sub(r"(\d)\s+(\d)", r"\1\2", value) # Remove spaces inside numbers (e.g., "1 020" → "1020")
-                            values = re.findall(r"\d+", clean_val)
-                            product_info['nutrition']['per_100g']['energy_kJ'] = int(values[0])
-                            product_info['nutrition']['per_100g']['energy_kcal'] = int(values[1])
-                        else:
-                            value_str = re.search(r"\d+\.\d+", value.replace(",", ".")).group()
-                            value_num = float(value_str) if "." in value_str else int(value_str)
-                            product_info['nutrition']['per_100g'][nutrition_map[nutrient]] = value_num
+        product_details = soup.find_all('div', class_='k-grid k-pt-3 k-pb-6')
+        for detail in product_details:
+            items = detail.find_all('div')
+            key = items[0].get_text(strip=True)
+            value = items[1].get_text(strip=True)
 
-        # Extract product details
-        details_section = soup.find('h2', string='Produktinformasjon')
-        if details_section:
-            details_table = details_section.find_next('table', id='product-info')
-            if details_table:
-                for row in details_table.find_all('tr'):
-                    cells = row.find_all('td')
-                    if cells[0].get_text(strip=True) == 'Opphavsland':
-                        product_info['origin_country'] = cells[1].get_text(strip=True)
-                    elif cells[0].get_text(strip=True) == 'GTIN':
-                        product_info['gtin'] = cells[1].get_text(strip=True)
-                    elif cells[0].get_text(strip=True) == 'EPD-nummer':
-                        product_info['epd'] = cells[1].get_text(strip=True)
-
-        # Extract description (if available)
-        description = soup.find('div', class_='col-sm-9').find('p', class_='paragraph-padding')
-        product_info['product_description'] = description.get_text(strip=True) if description else None
-
-        # Extract product image url
-        image_section = soup.find('div', class_='image-header')
-        product_info['image'] = image_section.find('img')['src'] if image_section and image_section.find('img') else None
+            # Check if this item indicates nutrition
+            if key == "Energi":
+                clean_val = re.sub(r"(\d)\s+(\d)", r"\1\2", value) # Remove spaces inside numbers (e.g., "1 020" → "1020")
+                values = re.findall(r"\d+", clean_val)
+                product_info['nutrition']['per_100g']['energy_kJ'] = int(values[0])
+                product_info['nutrition']['per_100g']['energy_kcal'] = int(values[1])
+                continue
+            if key in nutrition_map:
+                value = float(re.search(r"\d+\.\d+", value).group())
+                product_info['nutrition']['per_100g'][nutrition_map[key]] = value
+                continue
+                
+            # In case of other contents
+            if key == "Leverandør":
+                product_info['producer'] = value
+                continue
+            if key == "Allergener":
+                product_info['allergens'] = value.rstrip('.').split(', ')
+                continue
+            if key == "Ingredienser":
+                product_info['ingredients'] = parse_ingredients(value)
 
         # Save result data
         global result_data
@@ -238,16 +206,18 @@ def oda_scraper():
     global result_data
     result_data = []
 
-    search_url = "https://oda.com/no/search/products/?q=lunch"
+    # search_url = "https://oda.com/no/search/products/?q=lunch"
     # product_list = get_product_list(search_url)
 
     # for product_url in product_list:
-    get_product_detail("https://oda.com/no/products/66066-norgescatering-baguette-med-ost-skinke/")
+    #     get_product_detail(product_url)
 
-    # with open("product_info.json", 'w', encoding="utf-8") as file:
-    #     json.dump(result_data, file, ensure_ascii=False, indent=2)
+    get_product_detail("https://oda.com/no/products/39109-bama-ost-og-skinkesalat-i-beger/")
 
-    # return result_data
+    with open("product_info.json", 'w', encoding="utf-8") as file:
+        json.dump(result_data, file, ensure_ascii=False, indent=2)
+
+    return result_data
 
 if __name__ == "__main__":
     oda_scraper()
