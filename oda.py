@@ -206,13 +206,11 @@ def oda_scraper():
     global result_data
     result_data = []
 
-    # search_url = "https://oda.com/no/search/products/?q=lunch"
-    # product_list = get_product_list(search_url)
+    search_url = "https://oda.com/no/search/products/?q=lunch"
+    product_list = get_product_list(search_url)
 
-    # for product_url in product_list:
-    #     get_product_detail(product_url)
-
-    get_product_detail("https://oda.com/no/products/39109-bama-ost-og-skinkesalat-i-beger/")
+    for product_url in product_list:
+        get_product_detail(product_url)
 
     with open("product_info.json", 'w', encoding="utf-8") as file:
         json.dump(result_data, file, ensure_ascii=False, indent=2)
