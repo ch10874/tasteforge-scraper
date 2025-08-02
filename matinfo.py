@@ -189,7 +189,7 @@ def get_product_detail(product_url):
                             values = re.findall(r"\d+", clean_val)
                             product_info['nutrition']['per_100g']['energy_kJ'] = int(values[0])
                             product_info['nutrition']['per_100g']['energy_kcal'] = int(values[1])
-                        else:
+                        elif nutrient in nutrition_map:
                             value_str = re.search(r"\d+\.\d+", value.replace(",", ".")).group()
                             value_num = float(value_str) if "." in value_str else int(value_str)
                             product_info['nutrition']['per_100g'][nutrition_map[nutrient]] = value_num
@@ -223,12 +223,11 @@ def get_product_detail(product_url):
     except Exception as e:
         print(f"Error: {e}")
 
-def matinfo_scraper():
+def matinfo_scraper(search_url = "https://produkter.matinfo.no/resultat?query=nordic%20lunch"):
     # Initiate the result data
     global result_data
     result_data = []
 
-    search_url = "https://produkter.matinfo.no/resultat?query=nordic%20lunch"
     product_list = get_product_list(search_url)
 
     for product_url in product_list:
