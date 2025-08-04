@@ -15,9 +15,9 @@ async def home():
 @app.post("/matinfo")  # Matinfo scraper endpoint
 async def matinfo_scraper(request_data: ProductRequest):
     product_data = matinfo.matinfo_scraper(request_data.search_url)
-    return {"data": product_data}
+    return product_data
 
 @app.post("/oda") # Oda scraper endpoint
 async def oda_scraper():
     product_data = oda.oda_scraper()
-    return {"data": product_data}
+    return product_data
